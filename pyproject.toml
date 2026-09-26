@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "marginpilot"
+version = "1.0.0"
+description = "A desktop financial scenario analyzer for pricing, volume, and cost decisions."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "MarginPilot Project" }]
+keywords = ["financial-analysis", "scenario-planning", "pyside6", "desktop"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "PySide6>=6.7,<7",
+    "pandas>=2.2,<4",
+    "numpy>=1.26,<3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0,<10"]
+
+[project.scripts]
+marginpilot = "marginpilot.app:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+marginpilot = ["resources/*.qss"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra"

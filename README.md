@@ -187,6 +187,10 @@ The script opens the actual PySide6 window, loads the CSV, applies a scenario, s
 
 As an MBA student, I wanted a portfolio project that went beyond calculating a correct answer. Managers need to understand which assumptions drive a result, how much a proposal changes profit, and what downside remains. MarginPilot combines the financial logic of contribution analysis with an interface designed for a concise decision conversation. It also demonstrates that business analysis can be packaged as maintainable, tested software rather than left as a one-off spreadsheet.
 
+## AI usage acknowledgment
+
+Generative AI tools assisted during development with brainstorming, code drafting and refinement, debugging, test development, and documentation. I reviewed, tested, and took responsibility for the final implementation and project decisions. MarginPilot itself does not use AI at runtime, send data to an AI service, or require an internet connection.
+
 ## License
 
 MarginPilot is available under the [MIT License](LICENSE).

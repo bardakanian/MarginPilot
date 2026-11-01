@@ -22,3 +22,6 @@ Thumbs.db
 # Local exports and temporary files
 *.log
 *.tmp
+
+# Local notes for Claude Code
+CLAUDE.md

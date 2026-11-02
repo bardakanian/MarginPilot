@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from marginpilot.models.risk_model import RiskConfig, RiskResults
 from marginpilot.theme_manager import CHART_THEMES, LIGHT
+from marginpilot.widgets.chart_panel import currency_scale
 from marginpilot.widgets.kpi_card import format_currency
 
 
@@ -178,19 +179,15 @@ class RiskPanel(QWidget):
         chart.setTitle("Distribution of Simulated Operating Profit")
         _style_chart(chart, self._theme)
         chart.addSeries(series)
+        scale = currency_scale([float(edges[0]), float(edges[-1])])
         labels = []
         for index in range(len(counts)):
-            midpoint = (edges[index] + edges[index + 1]) / 2
             if index % 4 == 0:
-                sign = "-" if midpoint < 0 else ""
-                label = (
-                    f"{sign}${abs(midpoint) / 1_000_000:.1f}m"
-                    if abs(midpoint) >= 1_000_000
-                    else f"{sign}${abs(midpoint) / 1000:.0f}k"
-                )
+                midpoint = (edges[index] + edges[index + 1]) / 2 / scale.divisor
+                labels.append(scale.label(float(midpoint), 1 if scale.suffix == "M" else 0))
             else:
-                label = "\u200b" * (index + 1)
-            labels.append(label)
+                # Category labels must be unique, so unlabeled bins get invisible text.
+                labels.append("\u200b" * (index + 1))
         x_axis = QBarCategoryAxis()
         x_axis.append(labels)
         x_axis.setTitleText("Operating profit")

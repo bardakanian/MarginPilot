@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
+from typing import TypeVar
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QKeySequence
+from PySide6.QtGui import QAction, QImage, QKeySequence, QPainter
 from PySide6.QtWidgets import (
-    QApplication,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -24,9 +28,15 @@ from PySide6.QtWidgets import (
 )
 
 from marginpilot.models.financial_model import apply_changes, calculate_financials
+from marginpilot.models.recommendation_model import generate_management_assessment
 from marginpilot.models.risk_model import RiskConfig, run_profit_simulation
 from marginpilot.services.csv_service import CSVValidationError, load_csv
-from marginpilot.theme_manager import DARK, ThemeManager
+from marginpilot.services.report_service import (
+    ScenarioSnapshot,
+    write_pdf_report,
+    write_scenario_csv,
+)
+from marginpilot.theme_manager import DARK, LIGHT, ThemeManager, application_theme_manager
 from marginpilot.widgets.chart_panel import FinancialChartPanel, SensitivityCard
 from marginpilot.widgets.glossary_dialog import BusinessGlossaryDialog
 from marginpilot.widgets.input_panel import InputPanel
@@ -39,6 +49,8 @@ from marginpilot.widgets.kpi_card import (
 from marginpilot.widgets.recommendation_panel import RecommendationPanel
 from marginpilot.widgets.risk_panel import RiskPanel
 
+ChartWidget = TypeVar("ChartWidget", FinancialChartPanel, SensitivityCard)
+
 
 class MainWindow(QMainWindow):
     """Professional scenario-planning workspace."""
@@ -49,8 +61,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1080, 680)
         self.resize(1440, 900)
         self.project_root = Path(__file__).resolve().parents[2]
-        application = QApplication.instance()
-        self.theme_manager: ThemeManager = getattr(application, "theme_manager")
+        self.theme_manager: ThemeManager = application_theme_manager()
         self.glossary_dialog: BusinessGlossaryDialog | None = None
 
         central = QWidget()
@@ -68,6 +79,8 @@ class MainWindow(QMainWindow):
         root.addWidget(self.workspace_tabs, 1)
         self.setCentralWidget(central)
 
+        # The size grip renders as a grey block with the themed status bar.
+        self.statusBar().setSizeGripEnabled(False)
         self.statusBar().showMessage(
             "Ready • All calculations and imported data stay on this computer"
         )
@@ -104,6 +117,23 @@ class MainWindow(QMainWindow):
         self.import_button.setShortcut(QKeySequence("Ctrl+I"))
         self.import_button.clicked.connect(self.import_csv_dialog)
 
+        self.export_button = QPushButton("Export")
+        self.export_button.setObjectName("headerButton")
+        self.export_button.setToolTip(
+            "Save an executive summary (PDF) or the scenario figures (CSV) locally."
+        )
+        export_menu = QMenu(self.export_button)
+        self.export_pdf_action = QAction("Executive summary (PDF)…", self)
+        self.export_pdf_action.setShortcut(QKeySequence("Ctrl+P"))
+        self.export_pdf_action.triggered.connect(self.export_pdf_dialog)
+        self.export_csv_action = QAction("Scenario figures (CSV)…", self)
+        self.export_csv_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        self.export_csv_action.triggered.connect(self.export_csv_dialog)
+        for action in (self.export_pdf_action, self.export_csv_action):
+            export_menu.addAction(action)
+            self.addAction(action)
+        self.export_button.setMenu(export_menu)
+
         self.glossary_button = QPushButton("Explain Terms")
         self.glossary_button.setObjectName("headerButton")
         self.glossary_button.setIcon(
@@ -130,6 +160,7 @@ class MainWindow(QMainWindow):
         self.reset_button.clicked.connect(self.reset_application)
         layout.addWidget(self.example_button)
         layout.addWidget(self.import_button)
+        layout.addWidget(self.export_button)
         layout.addWidget(self.glossary_button)
         layout.addWidget(self.theme_button)
         layout.addWidget(self.reset_button)
@@ -184,7 +215,7 @@ class MainWindow(QMainWindow):
             "revenue": KpiCard("Revenue", format_currency),
             "total_costs": KpiCard("Total costs", format_currency, lower_is_better=True),
             "operating_profit": KpiCard("Operating profit", format_currency),
-            "profit_margin": KpiCard("Profit margin", format_percent),
+            "profit_margin": KpiCard("Profit margin", format_percent, in_points=True),
             "break_even_units": KpiCard("Break-even units", format_units, lower_is_better=True),
         }
         for card in self.kpi_cards.values():
@@ -233,20 +264,104 @@ class MainWindow(QMainWindow):
         )
         self.comparison_chart.update_comparison(current, proposed)
         self.sensitivity_chart.update_chart(baseline, changes)
-        self.recommendation.update_recommendation(
-            baseline, proposed_inputs, current, proposed
+        assessment = generate_management_assessment(
+            baseline,
+            proposed_inputs,
+            current,
+            proposed,
+            price_elasticity=changes.price_elasticity,
         )
-        active = any(
-            abs(value) > 0.0001
-            for value in (
-                changes.price,
-                changes.volume,
-                changes.variable_cost,
-                changes.fixed_cost,
-                changes.marketing,
-            )
+        self.recommendation.show_assessment(assessment)
+        self.scenario_badge.setText("ACTIVE SCENARIO" if changes.is_active else "BASELINE")
+        self._snapshot = ScenarioSnapshot(
+            baseline=baseline,
+            proposed_inputs=proposed_inputs,
+            changes=changes,
+            current=current,
+            proposed=proposed,
+            assessment=assessment,
+            source_name=(
+                self.input_panel.imported_data.source.name
+                if self.input_panel.imported_data is not None
+                else None
+            ),
         )
-        self.scenario_badge.setText("ACTIVE SCENARIO" if active else "BASELINE")
+
+    def current_snapshot(self) -> ScenarioSnapshot:
+        """The dashboard state as last calculated, stamped with the export time."""
+
+        return replace(
+            self._snapshot, generated_at=datetime.now().replace(microsecond=0)
+        )
+
+    def export_pdf_dialog(self) -> None:
+        path = self._ask_save_path("Export executive summary", "pdf", "PDF files (*.pdf)")
+        if path:
+            self.export_pdf(path)
+
+    def export_csv_dialog(self) -> None:
+        path = self._ask_save_path("Export scenario figures", "csv", "CSV files (*.csv)")
+        if path:
+            self.export_csv(path)
+
+    def export_pdf(self, path: str | Path) -> bool:
+        snapshot = self.current_snapshot()
+        charts = {
+            "comparison": self._render_chart_image(
+                lambda panel: panel.update_comparison(snapshot.current, snapshot.proposed),
+                FinancialChartPanel,
+            ),
+            "sensitivity": self._render_chart_image(
+                lambda panel: panel.update_chart(snapshot.baseline, snapshot.changes),
+                SensitivityCard,
+            ),
+        }
+        return self._finish_export(lambda: write_pdf_report(snapshot, path, charts))
+
+    def export_csv(self, path: str | Path) -> bool:
+        snapshot = self.current_snapshot()
+        return self._finish_export(lambda: write_scenario_csv(snapshot, path))
+
+    def _finish_export(self, write: Callable[[], Path]) -> bool:
+        try:
+            saved = write()
+        except OSError as exc:
+            QMessageBox.warning(self, "Export problem", f"The file could not be saved: {exc}")
+            self.statusBar().showMessage("Export failed • Choose another location and try again")
+            return False
+        self.statusBar().showMessage(f"Exported {saved.name} • Saved locally to {saved.parent}")
+        return True
+
+    def _ask_save_path(self, title: str, extension: str, file_filter: str) -> str:
+        default = Path.home() / f"MarginPilot-{datetime.now():%Y-%m-%d}.{extension}"
+        path, _selected_filter = QFileDialog.getSaveFileName(
+            self, title, str(default), file_filter
+        )
+        if path and not path.lower().endswith(f".{extension}"):
+            path += f".{extension}"
+        return path
+
+    @staticmethod
+    def _render_chart_image(
+        fill: Callable[[ChartWidget], None], widget_type: type[ChartWidget]
+    ) -> QImage:
+        """Draw a chart off screen in Light mode so printed reports stay readable."""
+
+        widget = widget_type(LIGHT)
+        widget.setStyleSheet("background: #FFFFFF;")
+        fill(widget)
+        view = widget.chart_view
+        view.resize(560, 330)
+        scale = 2.0
+        image = QImage(view.size() * scale, QImage.Format.Format_ARGB32)
+        image.setDevicePixelRatio(scale)
+        image.fill(Qt.GlobalColor.white)
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        view.render(painter)
+        painter.end()
+        widget.deleteLater()
+        return image
 
     def import_csv_dialog(self) -> None:
         path, _selected_filter = QFileDialog.getOpenFileName(
@@ -270,7 +385,8 @@ class MainWindow(QMainWindow):
         self.input_panel.set_imported_data(imported)
         self.workspace_tabs.setCurrentIndex(0)
         self.statusBar().showMessage(
-            f"Loaded {imported.source.name} • {len(imported.dataframe)} rows aggregated into the baseline"
+            f"Loaded {imported.source.name} • {len(imported.dataframe)} rows aggregated "
+            "into the baseline"
         )
         return True
 

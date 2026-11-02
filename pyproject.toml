@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "marginpilot"
-version = "1.0.0"
+version = "1.1.0"
 description = "A desktop financial scenario analyzer for pricing, volume, and cost decisions."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -24,7 +24,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0,<10"]
+dev = [
+    "pytest>=8.0,<10",
+    "pytest-qt>=4.4,<5",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pandas-stubs>=2.2",
+]
 
 [project.scripts]
 marginpilot = "marginpilot.app:main"
@@ -43,3 +49,30 @@ marginpilot = ["resources/*.qss"]
 pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "-ra"
+qt_api = "pyside6"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "RUF"]
+# Qt overrides and signals use camelCase names, Qt models take QModelIndex()
+# defaults, and the financial copy deliberately uses typographic symbols.
+ignore = ["N802", "N815", "B008", "RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+# Glossary definitions are prose.
+"src/marginpilot/widgets/glossary_dialog.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["marginpilot.models.*", "marginpilot.services.*"]
+disallow_untyped_defs = true

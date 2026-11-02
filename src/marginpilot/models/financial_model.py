@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import isfinite
 
 
@@ -30,15 +30,49 @@ class FinancialInputs:
             raise ValueError("Financial inputs cannot be negative.")
 
 
+MIN_PRICE_ELASTICITY = -5.0
+
+
 @dataclass(frozen=True, slots=True)
 class ScenarioChanges:
-    """Percentage changes applied to a baseline scenario."""
+    """Percentage changes applied to a baseline scenario.
+
+    ``price_elasticity`` is the constant price elasticity of demand. At 0 (the
+    default) volume ignores price; at -1.5 a 1% price rise costs about 1.5% of
+    volume, on top of the independent ``volume`` change.
+    """
 
     price: float = 0.0
     volume: float = 0.0
     variable_cost: float = 0.0
     fixed_cost: float = 0.0
     marketing: float = 0.0
+    price_elasticity: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not isfinite(self.price_elasticity):
+            raise ValueError("Price elasticity must be a finite number.")
+        if not MIN_PRICE_ELASTICITY <= self.price_elasticity <= 0:
+            raise ValueError(
+                f"Price elasticity must be between {MIN_PRICE_ELASTICITY:g} and 0."
+            )
+        if self.price <= -100:
+            raise ValueError("Price cannot fall by 100% or more.")
+
+    @property
+    def is_active(self) -> bool:
+        """Whether any percentage lever differs from the baseline."""
+
+        return any(
+            abs(value) > 0.0001
+            for value in (
+                self.price,
+                self.volume,
+                self.variable_cost,
+                self.fixed_cost,
+                self.marketing,
+            )
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,9 +93,13 @@ def apply_changes(
 ) -> FinancialInputs:
     """Return operating inputs after applying percentage changes."""
 
+    price_factor = 1.0 + changes.price / 100.0
+    demand_response = price_factor**changes.price_elasticity
     return FinancialInputs(
-        units_sold=baseline.units_sold * (1.0 + changes.volume / 100.0),
-        price_per_unit=baseline.price_per_unit * (1.0 + changes.price / 100.0),
+        units_sold=baseline.units_sold
+        * (1.0 + changes.volume / 100.0)
+        * demand_response,
+        price_per_unit=baseline.price_per_unit * price_factor,
         variable_cost_per_unit=baseline.variable_cost_per_unit
         * (1.0 + changes.variable_cost / 100.0),
         fixed_costs=baseline.fixed_costs * (1.0 + changes.fixed_cost / 100.0),
@@ -101,3 +139,41 @@ def percentage_change(current: float | None, proposed: float | None) -> float | 
     if current is None or proposed is None or current == 0:
         return None
     return (proposed - current) / abs(current) * 100.0
+
+
+@dataclass(frozen=True, slots=True)
+class SensitivityPoint:
+    """Operating profit at one price change, all other levers held."""
+
+    price_change: float
+    operating_profit: float
+
+
+def price_sensitivity(
+    baseline: FinancialInputs,
+    changes: ScenarioChanges,
+    *,
+    low: float = -20.0,
+    high: float = 20.0,
+    step: float = 0.5,
+) -> list[SensitivityPoint]:
+    """Profit across a price-change range, keeping every other lever fixed."""
+
+    if step <= 0 or high < low:
+        raise ValueError("The sensitivity range must have a positive step.")
+    count = round((high - low) / step)
+    points = []
+    for index in range(count + 1):
+        price_change = low + index * step
+        varied = replace(changes, price=price_change)
+        profit = calculate_financials(apply_changes(baseline, varied)).operating_profit
+        points.append(SensitivityPoint(price_change, profit))
+    return points
+
+
+def best_price_change(points: list[SensitivityPoint]) -> SensitivityPoint:
+    """Return the most profitable point; ties go to the smallest price change."""
+
+    if not points:
+        raise ValueError("At least one sensitivity point is required.")
+    return max(points, key=lambda point: (point.operating_profit, -abs(point.price_change)))

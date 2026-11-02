@@ -5,11 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from importlib.resources import files
 
-from PySide6.QtCore import QSettings, Qt, Signal
+from PySide6.QtCore import QObject, QSettings, Qt, Signal
 from PySide6.QtGui import QColor, QGuiApplication, QPalette
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QObject
-
 
 LIGHT = "light"
 DARK = "dark"
@@ -66,6 +64,15 @@ CHART_THEMES = {
         zero="#CBD5E1",
     ),
 }
+
+
+def application_theme_manager() -> ThemeManager:
+    """Return the theme manager that ``create_application`` attached to the app."""
+
+    manager = getattr(QApplication.instance(), "theme_manager", None)
+    if not isinstance(manager, ThemeManager):
+        raise RuntimeError("Create the application with create_application() first.")
+    return manager
 
 
 class ThemeManager(QObject):

@@ -26,6 +26,8 @@ def generate_management_assessment(
     proposed_inputs: FinancialInputs,
     current: FinancialResults,
     proposed: FinancialResults,
+    *,
+    price_elasticity: float = 0.0,
 ) -> ManagementAssessment:
     """Build a concise assessment using only calculated scenario values."""
 
@@ -78,9 +80,11 @@ def generate_management_assessment(
     assumptions_note = (
         f"Proposed assumptions: {proposed_inputs.units_sold:,.0f} units • "
         f"{_currency(proposed_inputs.price_per_unit, decimals=2)} per unit • "
-        f"{_currency(proposed_inputs.marketing_spend)} marketing. "
-        "Scenario estimates are not guaranteed forecasts."
+        f"{_currency(proposed_inputs.marketing_spend)} marketing"
     )
+    if price_elasticity:
+        assumptions_note += f" • price elasticity {price_elasticity:.1f}"
+    assumptions_note += ". Scenario estimates are not guaranteed forecasts."
     return ManagementAssessment(
         summary=f"{outcome} {comparison} {conclusion}",
         status=status,

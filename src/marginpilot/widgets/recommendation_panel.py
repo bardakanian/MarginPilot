@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
-from marginpilot.models.financial_model import FinancialInputs, FinancialResults
-from marginpilot.models.recommendation_model import generate_management_assessment
+from marginpilot.models.recommendation_model import ManagementAssessment
 
 
 class RecommendationPanel(QFrame):
@@ -35,16 +34,7 @@ class RecommendationPanel(QFrame):
         layout.addWidget(self.summary)
         layout.addWidget(self.note)
 
-    def update_recommendation(
-        self,
-        current_inputs: FinancialInputs,
-        proposed_inputs: FinancialInputs,
-        current: FinancialResults,
-        proposed: FinancialResults,
-    ) -> None:
-        assessment = generate_management_assessment(
-            current_inputs, proposed_inputs, current, proposed
-        )
+    def show_assessment(self, assessment: ManagementAssessment) -> None:
         self.summary.setText(assessment.summary)
         self.note.setText(assessment.assumptions_note)
         self.status_badge.setText(assessment.status)

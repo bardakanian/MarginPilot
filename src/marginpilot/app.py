@@ -14,7 +14,8 @@ from marginpilot.theme_manager import ThemeManager
 def create_application(argv: list[str] | None = None) -> QApplication:
     """Create and style the QApplication instance."""
 
-    app = QApplication.instance() or QApplication(argv or sys.argv)
+    existing = QApplication.instance()
+    app = existing if isinstance(existing, QApplication) else QApplication(argv or sys.argv)
     app.setApplicationName("MarginPilot")
     app.setApplicationDisplayName("MarginPilot — Interactive Profit Scenario Analyzer")
     app.setOrganizationName("MarginPilot Project")

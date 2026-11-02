@@ -10,7 +10,6 @@ import pandas as pd
 
 from marginpilot.models.financial_model import FinancialInputs
 
-
 REQUIRED_COLUMNS = (
     "period",
     "units_sold",
@@ -56,7 +55,7 @@ def load_csv(path: str | Path) -> ImportedData:
             "Missing required column(s): " + ", ".join(missing) + "."
         )
 
-    validated = dataframe.loc[:, REQUIRED_COLUMNS].copy()
+    validated = dataframe[list(REQUIRED_COLUMNS)].copy()
     missing_period = validated["period"].isna() | (
         validated["period"].astype(str).str.strip() == ""
     )

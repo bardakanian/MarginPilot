@@ -1,5 +1,7 @@
 # MarginPilot — Interactive Profit Scenario Analyzer
 
+[![CI](https://github.com/bardakanian/MarginPilot/actions/workflows/ci.yml/badge.svg)](https://github.com/bardakanian/MarginPilot/actions/workflows/ci.yml)
+
 MarginPilot is a polished, local-first Python desktop application for comparing a current operating baseline with proposed pricing, sales-volume, and cost scenarios. It turns raw operating assumptions into financial KPIs, visual tradeoffs, a management assessment, and an understandable risk analysis.
 
 | Light dashboard | Dark dashboard |
@@ -19,11 +21,13 @@ MarginPilot provides a repeatable decision workspace where a manager can establi
 - Manual baseline entry with validated units, price, variable cost, fixed cost, and marketing inputs
 - Validated CSV import with a preserved read-only data preview and clear row-specific errors
 - Five synchronized slider and numeric scenario controls with one-click resets
+- Optional price elasticity of demand, so volume can respond to price instead of being set independently
 - Current-to-proposed values shown directly beside every scenario control
 - Current vs. proposed KPI cards showing absolute and percentage changes with accessible direction labels
 - Live grouped bar chart for revenue, total costs, and operating profit, including negative profit
-- Price-sensitivity curve from -20% to +20%, with the selected scenario highlighted
+- Price-sensitivity curve from -20% to +20%, with the selected scenario and, when elasticity is set, the most profitable price change highlighted
 - Deterministic Management Assessment with a financial status and explicit assumptions
+- One-page PDF executive summary and CSV export of the scenario, saved locally
 - Scrollable **Explain Terms** glossary with plain-language definitions and formulas
 - Complete Light and Dark modes with immediate chart updates and persistent selection
 - Reproducible Monte Carlo simulation with risk probabilities, percentiles, and a profit histogram
@@ -57,6 +61,31 @@ Select **Load Example** in the header to open the included 12-month dataset for 
 Select **Theme: Light** or **Theme: Dark** in the header to switch appearance immediately. MarginPilot remembers the selection between sessions. On the first launch, it uses the operating-system color preference when Qt can detect it and otherwise starts in Light mode.
 
 The application does not need an internet connection. Imported files and calculated results remain on the computer running MarginPilot.
+
+### Keyboard shortcuts
+
+| Action | Shortcut |
+| --- | --- |
+| Load example | Ctrl+L |
+| Import CSV | Ctrl+I |
+| Export executive summary (PDF) | Ctrl+P |
+| Export scenario figures (CSV) | Ctrl+Shift+S |
+| Explain terms | Ctrl+E |
+| Switch theme | Ctrl+T |
+| Reset | Ctrl+R |
+
+On macOS, Ctrl is the Command key.
+
+## Exporting a decision summary
+
+Select **Export** in the header:
+
+- **Executive summary (PDF)** saves a one-page A4 report: the Management Assessment and its status, the current-versus-proposed and price-sensitivity charts, a table of results and assumptions with absolute and percentage changes, and every scenario setting, including elasticity. Charts are always drawn in Light mode so the report prints cleanly.
+- **Scenario figures (CSV)** saves the same comparison with unrounded values (`section, item, unit, current, proposed, change, change_pct`) for further analysis in a spreadsheet.
+
+Both files are written only to the location you choose.
+
+<img src="assets/screenshots/export-summary.png" alt="One-page PDF executive summary exported from MarginPilot" width="520">
 
 ## CSV import
 
@@ -96,7 +125,15 @@ Contribution margin / unit  = selling price − variable cost per unit
 Break-even units            = (fixed costs + marketing spend) ÷ contribution margin / unit
 ```
 
-Profit margin is shown as `N/A` when revenue is zero. Break-even units are shown as `N/A` when contribution margin is zero or negative.
+Profit margin is shown as `N/A` when revenue is zero. Break-even units are shown as `N/A` when contribution margin is zero or negative. A change in profit margin is reported in percentage points (pp).
+
+With a price elasticity of demand *e* (between -5 and 0), proposed volume also responds to the price change using a constant-elasticity model:
+
+```text
+Proposed units = baseline units × (1 + volume change) × (1 + price change) ^ e
+```
+
+At *e* = 0, the default, the second factor is 1 and volume is independent of price, exactly as in version 1.0.
 
 ## Business glossary
 
@@ -106,9 +143,14 @@ Select **Explain Terms** in the header for a read-only reference covering every 
 
 ### Scenario and sensitivity assumptions
 
-Each scenario percentage is applied independently to its baseline input. For example, a +5% volume change multiplies baseline units by 1.05, and a -3% variable-cost change multiplies baseline unit cost by 0.97. The model does not infer price elasticity or automatically connect marketing to demand.
+Each scenario percentage is applied to its baseline input. For example, a +5% volume change multiplies baseline units by 1.05, and a -3% variable-cost change multiplies baseline unit cost by 0.97. Price elasticity is the only link between levers: it is off by default, it is a user-chosen assumption rather than an estimate from data, and the model never connects marketing to demand.
 
-The **Profit Sensitivity** chart varies price from -20% to +20%. At every point it holds the selected sales-volume, variable-cost, fixed-cost, and marketing changes constant. This isolates price sensitivity; it is not a demand-response forecast.
+The **Profit Sensitivity** chart varies price from -20% to +20% in 0.5% steps. At every point it holds the selected sales-volume, variable-cost, fixed-cost, and marketing changes constant.
+
+- With elasticity **off**, volume ignores price, so profit rises in a straight line and the chart isolates the pure price effect.
+- With elasticity **set**, volume falls as price rises, the curve bends, and a square marker shows the most profitable price change in the range. For a constant elasticity *e* < -1 with no capacity limit, profit peaks where price = unit cost × *e* ÷ (1 + *e*); if that price lies outside the range, the best point sits at the edge.
+
+A dashed break-even line appears whenever the curve crosses zero profit.
 
 ## Monte Carlo risk analysis in plain language
 
@@ -137,26 +179,37 @@ src/marginpilot/
   models/recommendation_model.py Deterministic management assessment
   models/risk_model.py          NumPy Monte Carlo simulation
   services/csv_service.py       pandas validation and weighted aggregation
+  services/report_service.py    PDF executive summary and CSV scenario export
   widgets/                      Inputs, KPIs, charts, glossary, assessment, and risk UI
   main_window.py                Application orchestration
   theme_manager.py              Central theme selection and QSettings persistence
   resources/*_theme.qss         Complete Light and Dark application themes
 sample_data/                    Recruiter-ready example dataset
 scripts/capture_screenshots.py  Deterministic real-application capture
-tests/                          Unit tests for finance, CSV, and risk behavior
+tests/                          Model, service, and headless UI tests (pytest-qt)
+.github/workflows/ci.yml        Lint, type-check, and test on Python 3.11 and 3.13
 ```
 
 Financial calculations have no Qt dependency, CSV processing is isolated from presentation, and the window coordinates model outputs and reusable widgets. This keeps the most important business rules straightforward to review and test.
 
 ## Testing
 
-Run the complete suite:
+Run the complete suite, the linter, and the type checker:
 
 ```bash
 pytest
+ruff check .
+mypy
 ```
 
-The tests cover profitable and loss-making operations, zero units and revenue, non-positive contribution margins, break-even math, scenario percentages, management-assessment language and formatting, theme persistence, CSV aggregation and validation, and fixed-seed simulation reproducibility.
+The 68 tests cover:
+
+- **Financial model:** profitable and loss-making operations, zero units and revenue, non-positive contribution margins, break-even math, scenario percentages, price elasticity, and the sensitivity optimum (checked against the closed-form constant-elasticity result).
+- **Assessment, CSV, and risk:** management-assessment language, CSV aggregation and validation, and fixed-seed simulation reproducibility.
+- **Exports and charts:** report rows, percentage-point changes, `N/A` handling, CSV round-trips, HTML escaping, PDF output, round axis ticks, and currency labels.
+- **The real window, headless:** loading the example, driving a slider with the keyboard, elasticity, reset, invalid-CSV handling, simulation, theme switching, and both exports, including a failed save.
+
+GitHub Actions runs `ruff`, `mypy`, and `pytest` on every push and pull request, on Python 3.11 and 3.13.
 
 To regenerate real screenshots at 1440×900 using the included example:
 
@@ -164,12 +217,12 @@ To regenerate real screenshots at 1440×900 using the included example:
 QT_QPA_PLATFORM=offscreen python scripts/capture_screenshots.py
 ```
 
-The script opens the actual PySide6 window, loads the CSV, applies a scenario, switches both themes, opens the real glossary, runs the simulation, captures each view with `QWidget.grab()`, and verifies image readability, file size, and dimensions. The repository contains no mockups or placeholder screenshots.
+The script opens the actual PySide6 window, loads the CSV, applies a scenario with price elasticity, switches both themes, opens the real glossary, runs the simulation, exports the real PDF summary, captures each view with `QWidget.grab()` (and page 1 of the PDF with Qt PDF), and verifies image readability, file size, and dimensions. The repository contains no mockups or placeholder screenshots.
 
 ## Known limitations
 
 - The model is a single-product-equivalent operating model; imported price and unit cost are weighted averages.
-- Scenario changes are independent and do not estimate price elasticity, marketing response, seasonality, or taxes.
+- Price elasticity is a single, constant, user-chosen value; the model does not estimate it from data, and it does not model marketing response, seasonality, capacity limits, or taxes.
 - Monte Carlo inputs are user-selected assumptions, use normal distributions, and model only volume and variable-unit-cost uncertainty.
 - Currency display uses dollars and is not currently configurable.
 - Imported data is held only for the active session and is not saved to a database.
@@ -178,8 +231,9 @@ The script opens the actual PySide6 window, loads the CSV, applies a scenario, s
 
 - Configurable currency and fiscal-period settings
 - Multi-product contribution-margin analysis
-- Optional price-elasticity and marketing-response models
-- Scenario save/export and printable executive summaries
+- Estimating price elasticity from historical CSV data
+- Optional marketing-response model
+- Saving and comparing several named scenarios side by side
 - Correlated risk factors and alternative probability distributions
 - Accessibility review with additional keyboard-navigation testing
 

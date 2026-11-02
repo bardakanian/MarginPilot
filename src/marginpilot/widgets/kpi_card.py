@@ -19,11 +19,14 @@ class KpiCard(QFrame):
         formatter: Callable[[float | None], str],
         *,
         lower_is_better: bool = False,
+        in_points: bool = False,
     ) -> None:
         super().__init__()
         self.setObjectName("kpiCard")
         self._formatter = formatter
         self._lower_is_better = lower_is_better
+        # Changes in a percentage are shown in points; a relative change would mislead.
+        self._in_points = in_points
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(3)
@@ -52,12 +55,17 @@ class KpiCard(QFrame):
         difference = proposed - current
         pct = percentage_change(current, proposed)
         if abs(difference) < 0.005:
-            self._set_change("→ $0  ·  Unchanged" if self._formatter(0).startswith("$") else "→ 0  ·  Unchanged", "neutralChange")
+            zero = "$0" if self._formatter(0).startswith("$") else "0"
+            self._set_change(f"→ {zero}  ·  Unchanged", "neutralChange")
             return
         improvement = difference < 0 if self._lower_is_better else difference > 0
         arrow = "↑" if difference > 0 else "↓"
         sign = "+" if difference > 0 else "−"
-        absolute = self._formatter(abs(difference))
+        if self._in_points:
+            absolute = f"{abs(difference):.1f} pp"
+            pct = None
+        else:
+            absolute = self._formatter(abs(difference))
         pct_text = f" · {pct:+.1f}%" if pct is not None else ""
         label = "Improved" if improvement else "Deteriorated"
         self._set_change(

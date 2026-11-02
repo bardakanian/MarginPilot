@@ -6,7 +6,14 @@ from collections.abc import Sequence
 from typing import Literal
 
 import pandas as pd
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSignalBlocker, Qt, Signal
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QModelIndex,
+    QPersistentModelIndex,
+    QSignalBlocker,
+    Qt,
+    Signal,
+)
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
@@ -15,14 +22,17 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSlider,
-    QSpinBox,
     QTableView,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from marginpilot.models.financial_model import FinancialInputs, ScenarioChanges
+from marginpilot.models.financial_model import (
+    MIN_PRICE_ELASTICITY,
+    FinancialInputs,
+    ScenarioChanges,
+)
 from marginpilot.services.csv_service import ImportedData
 
 
@@ -32,27 +42,43 @@ class DataFrameTableModel(QAbstractTableModel):
     def __init__(self) -> None:
         super().__init__()
         self._dataframe = pd.DataFrame()
+        self._whole_number_columns: set[int] = set()
 
     def set_dataframe(self, dataframe: pd.DataFrame) -> None:
         self.beginResetModel()
         self._dataframe = dataframe.copy()
+        # Columns such as units are stored as floats after validation but read
+        # better without decimals; a column keeps one format for alignment.
+        self._whole_number_columns = {
+            position
+            for position, column in enumerate(self._dataframe.columns)
+            if pd.api.types.is_float_dtype(self._dataframe[column])
+            and bool((self._dataframe[column] % 1 == 0).all())
+            and not str(column).endswith(("price_per_unit", "cost_per_unit"))
+        }
         self.endResetModel()
 
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
+    def rowCount(self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._dataframe)
 
-    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
+    def columnCount(self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._dataframe.columns)
 
-    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
+    def data(
+        self,
+        index: QModelIndex | QPersistentModelIndex,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> str | None:
         if not index.isValid() or role != Qt.ItemDataRole.DisplayRole:
             return None
         value = self._dataframe.iat[index.row(), index.column()]
         if isinstance(value, float):
+            if index.column() in self._whole_number_columns:
+                return f"{value:,.0f}"
             return f"{value:,.2f}"
         return str(value)
 
-    def headerData(  # noqa: N802
+    def headerData(
         self,
         section: int,
         orientation: Qt.Orientation,
@@ -86,6 +112,8 @@ class ScenarioControl(QFrame):
         layout.setSpacing(3)
 
         top = QHBoxLayout()
+        name_column = QVBoxLayout()
+        name_column.setSpacing(1)
         name = QLabel(label)
         name.setObjectName("fieldLabel")
         name.setToolTip(tooltip)
@@ -100,14 +128,15 @@ class ScenarioControl(QFrame):
         self.reset_button.setObjectName("smallButton")
         self.reset_button.setFixedWidth(52)
         self.reset_button.setToolTip(f"Reset {label.lower()} change to zero percent")
-        top.addWidget(name)
-        top.addStretch()
-        top.addWidget(self.spin)
-        top.addWidget(self.reset_button)
-
         self.value_flow = QLabel("Current —  →  Proposed —")
         self.value_flow.setObjectName("valueFlow")
         self.value_flow.setToolTip(tooltip)
+        name_column.addWidget(name)
+        name_column.addWidget(self.value_flow)
+        top.addLayout(name_column)
+        top.addStretch()
+        top.addWidget(self.spin)
+        top.addWidget(self.reset_button)
 
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(minimum * 10, maximum * 10)
@@ -116,7 +145,6 @@ class ScenarioControl(QFrame):
         self.slider.setToolTip(tooltip)
         self.slider.setAccessibleName(f"{label} percentage change slider")
         layout.addLayout(top)
-        layout.addWidget(self.value_flow)
         layout.addWidget(self.slider)
 
         self.slider.valueChanged.connect(self._from_slider)
@@ -192,7 +220,7 @@ class InputPanel(QFrame):
         self.mode_tabs.setObjectName("modeTabs")
         self.mode_tabs.addTab(self._build_manual_tab(), "Manual Entry")
         self.mode_tabs.addTab(self._build_csv_tab(), "CSV Import")
-        self.mode_tabs.setMinimumHeight(238)
+        self.mode_tabs.setMinimumHeight(226)
         root.addWidget(self.mode_tabs)
 
         divider = QFrame()
@@ -205,11 +233,33 @@ class InputPanel(QFrame):
         specifications: Sequence[
             tuple[str, int, int, str, str, Literal["currency", "units"], str]
         ] = (
-            ("Selling price", -20, 20, "price", "Adjust the amount charged for each unit. This is a scenario assumption, not a guaranteed customer response.", "currency", "Revenue Drivers"),
-            ("Sales volume", -30, 30, "volume", "Adjust the number of units expected to sell during the selected period.", "units", "Revenue Drivers"),
-            ("Unit cost", -20, 20, "variable_cost", "Adjust the variable cost incurred for each additional unit.", "currency", "Cost Drivers"),
-            ("Fixed costs", -20, 20, "fixed_cost", "Adjust fixed operating costs for the selected period.", "currency", "Cost Drivers"),
-            ("Marketing spend", -50, 100, "marketing", "Adjust planned marketing investment without assuming that it causes a specific sales result.", "currency", "Cost Drivers"),
+            (
+                "Selling price", -20, 20, "price",
+                "Adjust the amount charged for each unit. This is a scenario assumption, "
+                "not a guaranteed customer response.",
+                "currency", "Revenue Drivers",
+            ),
+            (
+                "Sales volume", -30, 30, "volume",
+                "Adjust the number of units expected to sell during the selected period.",
+                "units", "Revenue Drivers",
+            ),
+            (
+                "Unit cost", -20, 20, "variable_cost",
+                "Adjust the variable cost incurred for each additional unit.",
+                "currency", "Cost Drivers",
+            ),
+            (
+                "Fixed costs", -20, 20, "fixed_cost",
+                "Adjust fixed operating costs for the selected period.",
+                "currency", "Cost Drivers",
+            ),
+            (
+                "Marketing spend", -50, 100, "marketing",
+                "Adjust planned marketing investment without assuming that it causes a "
+                "specific sales result.",
+                "currency", "Cost Drivers",
+            ),
         )
         self.scenario_controls: dict[str, ScenarioControl] = {}
         current_group = ""
@@ -225,9 +275,61 @@ class InputPanel(QFrame):
             control.valueChanged.connect(lambda _value: self.inputsChanged.emit())
             self.scenario_controls[key] = control
             root.addWidget(control)
+            if key == "volume":
+                root.addWidget(self._build_elasticity_control())
         root.addStretch()
 
         self.set_baseline(self.DEFAULTS)
+
+    def _build_elasticity_control(self) -> QWidget:
+        tooltip = (
+            "How strongly customers react to price. At -1.5, a 1% price rise loses "
+            "about 1.5% of volume. Leave at 0 to treat volume and price as independent."
+        )
+        frame = QFrame()
+        frame.setObjectName("scenarioControl")
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(0, 3, 0, 5)
+        column = QVBoxLayout()
+        column.setSpacing(1)
+        name = QLabel("Price elasticity")
+        name.setObjectName("fieldLabel")
+        name.setToolTip(tooltip)
+        self.elasticity_hint = QLabel()
+        self.elasticity_hint.setObjectName("valueFlow")
+        self.elasticity_hint.setToolTip(tooltip)
+        column.addWidget(name)
+        column.addWidget(self.elasticity_hint)
+        self.elasticity = QDoubleSpinBox()
+        self.elasticity.setRange(MIN_PRICE_ELASTICITY, 0.0)
+        self.elasticity.setDecimals(1)
+        self.elasticity.setSingleStep(0.1)
+        self.elasticity.setFixedWidth(82)
+        self.elasticity.setToolTip(tooltip)
+        self.elasticity.setAccessibleName("Price elasticity of demand")
+        reset = QPushButton("Reset")
+        reset.setObjectName("smallButton")
+        reset.setFixedWidth(52)
+        reset.setToolTip("Turn price elasticity off")
+        reset.clicked.connect(lambda: self.elasticity.setValue(0.0))
+        self.elasticity.valueChanged.connect(self._on_elasticity_changed)
+        layout.addLayout(column)
+        layout.addStretch()
+        layout.addWidget(self.elasticity)
+        layout.addWidget(reset)
+        self._update_elasticity_hint()
+        return frame
+
+    def _on_elasticity_changed(self, _value: float) -> None:
+        self._update_elasticity_hint()
+        self.inputsChanged.emit()
+
+    def _update_elasticity_hint(self) -> None:
+        value = self.elasticity.value()
+        if value == 0:
+            self.elasticity_hint.setText("Off  ·  volume ignores price")
+        else:
+            self.elasticity_hint.setText(f"+1% price  →  {value:+.1f}% volume (approx.)")
 
     def _build_manual_tab(self) -> QWidget:
         page = QWidget()
@@ -302,6 +404,7 @@ class InputPanel(QFrame):
             variable_cost=self.scenario_controls["variable_cost"].value(),
             fixed_cost=self.scenario_controls["fixed_cost"].value(),
             marketing=self.scenario_controls["marketing"].value(),
+            price_elasticity=self.elasticity.value(),
         )
 
     def update_scenario_values(
@@ -357,4 +460,7 @@ class InputPanel(QFrame):
         self.mode_tabs.setCurrentIndex(0)
         for control in self.scenario_controls.values():
             control.set_value(0.0)
+        with QSignalBlocker(self.elasticity):
+            self.elasticity.setValue(0.0)
+        self._update_elasticity_hint()
         self.set_baseline(self.DEFAULTS)

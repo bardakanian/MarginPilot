@@ -6,7 +6,6 @@ import pytest
 
 from marginpilot.services.csv_service import CSVValidationError, load_csv
 
-
 VALID_HEADER = (
     "period,units_sold,price_per_unit,variable_cost_per_unit,fixed_costs,marketing_spend\n"
 )

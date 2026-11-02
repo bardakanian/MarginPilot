@@ -7,10 +7,10 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtCore import QSettings
+from PySide6.QtWidgets import QApplication
 
-from marginpilot.theme_manager import DARK, LIGHT, ThemeManager  # noqa: E402
+from marginpilot.theme_manager import DARK, LIGHT, ThemeManager
 
 
 def test_theme_selection_applies_and_persists(tmp_path: Path) -> None:

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from math import ceil, floor, log10
+
 from PySide6.QtCharts import (
     QBarCategoryAxis,
     QBarSeries,
     QBarSet,
+    QCategoryAxis,
     QChart,
     QChartView,
     QLineSeries,
@@ -21,13 +25,18 @@ from marginpilot.models.financial_model import (
     FinancialResults,
     ScenarioChanges,
     apply_changes,
+    best_price_change,
     calculate_financials,
+    price_sensitivity,
 )
 from marginpilot.theme_manager import CHART_THEMES, LIGHT
+from marginpilot.widgets.kpi_card import format_currency
+
+SENSITIVITY_RANGE = (-20.0, 20.0)
 
 
 class FinancialChartPanel(QFrame):
-    """Side-by-side financial comparison and price sensitivity charts."""
+    """Grouped bar chart comparing current and proposed results."""
 
     def __init__(self, theme: str = LIGHT) -> None:
         super().__init__()
@@ -50,7 +59,6 @@ class FinancialChartPanel(QFrame):
     ) -> None:
         colors = CHART_THEMES[self._theme]
         chart = _base_chart("Current vs. Proposed", self._theme)
-        chart.setAnimationOptions(QChart.AnimationOption.NoAnimation)
         current_set = QBarSet("Current")
         current_set.setColor(QColor(colors.current))
         current_set.setBorderColor(QColor(colors.current))
@@ -61,11 +69,9 @@ class FinancialChartPanel(QFrame):
         proposed_set.setLabelColor(QColor(colors.text))
         current_raw = [current.revenue, current.total_costs, current.operating_profit]
         proposed_raw = [proposed.revenue, proposed.total_costs, proposed.operating_profit]
-        divisor, unit_name, axis_format, label_suffix = _currency_scale(
-            current_raw + proposed_raw
-        )
-        current_values = [value / divisor for value in current_raw]
-        proposed_values = [value / divisor for value in proposed_raw]
+        scale = currency_scale(current_raw + proposed_raw)
+        current_values = [value / scale.divisor for value in current_raw]
+        proposed_values = [value / scale.divisor for value in proposed_raw]
         current_set.append(current_values)
         proposed_set.append(proposed_values)
         series = QBarSeries()
@@ -73,101 +79,36 @@ class FinancialChartPanel(QFrame):
         series.append(proposed_set)
         series.setBarWidth(0.88)
         series.setLabelsVisible(True)
-        series.setLabelsFormat(f"$@value{label_suffix}")
+        # QtCharts cannot put a minus sign before "$", so negative values drop
+        # the symbol; the axis title still names the currency.
+        has_negative = min(current_values + proposed_values) < 0
+        prefix = "" if has_negative else "$"
+        series.setLabelsFormat(f"{prefix}@value{scale.suffix}")
         series.setLabelsPrecision(3)
         series.setLabelsPosition(QBarSeries.LabelsPosition.LabelsOutsideEnd)
         chart.addSeries(series)
 
         category_axis = QBarCategoryAxis()
         category_axis.append(["Revenue", "Total costs", "Op. profit"])
-        value_axis = QValueAxis()
         low = min(0.0, *current_values, *proposed_values)
         high = max(0.0, *current_values, *proposed_values)
-        padding = max((high - low) * 0.16, 1.0)
-        value_axis.setRange(low - (padding if low < 0 else 0), high + padding)
-        value_axis.setLabelFormat(axis_format)
-        value_axis.setTitleText(f"USD ({unit_name})")
-        value_axis.setTickCount(6)
+        # Headroom keeps the outside-end labels inside the plot area.
+        span = high - low
+        value_axis = _money_axis(
+            low - (span * 0.12 if low < 0 else 0.0), high + span * 0.14, scale
+        )
         _style_axis(category_axis, self._theme)
         _style_axis(value_axis, self._theme)
         chart.addAxis(category_axis, Qt.AlignmentFlag.AlignBottom)
         chart.addAxis(value_axis, Qt.AlignmentFlag.AlignLeft)
         series.attachAxis(category_axis)
         series.attachAxis(value_axis)
-        chart.legend().setVisible(True)
-        chart.legend().setAlignment(Qt.AlignmentFlag.AlignBottom)
-        chart.legend().setLabelColor(QColor(colors.text))
-        self.chart_view.setChart(chart)
-
-    def update_sensitivity(
-        self, baseline: FinancialInputs, changes: ScenarioChanges
-    ) -> None:
-        colors = CHART_THEMES[self._theme]
-        chart = _base_chart("Profit Sensitivity to Price", self._theme)
-        line = QLineSeries()
-        line.setName("Projected profit")
-        line.setColor(QColor(colors.line))
-        line.setPen(QPen(QColor(colors.line), 2.5))
-        raw_points: list[tuple[float, float]] = []
-        for price_change in range(-20, 21):
-            varied = ScenarioChanges(
-                price=float(price_change),
-                volume=changes.volume,
-                variable_cost=changes.variable_cost,
-                fixed_cost=changes.fixed_cost,
-                marketing=changes.marketing,
-            )
-            profit = calculate_financials(apply_changes(baseline, varied)).operating_profit
-            raw_points.append((float(price_change), profit))
-
-        selected_profit = calculate_financials(
-            apply_changes(baseline, changes)
-        ).operating_profit
-        divisor, unit_name, axis_format, _label_suffix = _currency_scale(
-            [profit for _price, profit in raw_points] + [selected_profit]
-        )
-        profits = [profit / divisor for _price, profit in raw_points]
-        for price_change, profit in raw_points:
-            line.append(price_change, profit / divisor)
-        chart.addSeries(line)
-        selected = QScatterSeries()
-        selected.setName(f"Selected ({changes.price:+.1f}%)")
-        selected.setColor(QColor(colors.marker))
-        selected.setBorderColor(QColor(colors.marker_border))
-        selected.setMarkerSize(13)
-        selected.append(QPointF(changes.price, selected_profit / divisor))
-        chart.addSeries(selected)
-
-        x_axis = QValueAxis()
-        x_axis.setRange(-20, 20)
-        x_axis.setTickCount(5)
-        x_axis.setLabelFormat("%+.0f%%")
-        x_axis.setTitleText("Price change")
-        y_axis = QValueAxis()
-        selected_profit_scaled = selected_profit / divisor
-        low = min(0.0, *profits, selected_profit_scaled)
-        high = max(0.0, *profits, selected_profit_scaled)
-        padding = max((high - low) * 0.12, 1.0)
-        y_axis.setRange(low - padding, high + padding)
-        y_axis.setTickCount(6)
-        y_axis.setLabelFormat(axis_format)
-        y_axis.setTitleText(f"USD ({unit_name})")
-        _style_axis(x_axis, self._theme)
-        _style_axis(y_axis, self._theme)
-        chart.addAxis(x_axis, Qt.AlignmentFlag.AlignBottom)
-        chart.addAxis(y_axis, Qt.AlignmentFlag.AlignLeft)
-        line.attachAxis(x_axis)
-        line.attachAxis(y_axis)
-        selected.attachAxis(x_axis)
-        selected.attachAxis(y_axis)
-        chart.legend().setVisible(True)
-        chart.legend().setAlignment(Qt.AlignmentFlag.AlignBottom)
-        chart.legend().setLabelColor(QColor(colors.text))
+        _show_legend(chart, self._theme)
         self.chart_view.setChart(chart)
 
 
 class SensitivityCard(QFrame):
-    """Sensitivity chart with an explicit constant-assumptions note."""
+    """Profit across a price range, with demand response when elasticity is set."""
 
     def __init__(self, theme: str = LIGHT) -> None:
         super().__init__()
@@ -180,29 +121,186 @@ class SensitivityCard(QFrame):
         self.chart_view = QChartView()
         self.chart_view.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.chart_view.setMinimumHeight(250)
-        note = QLabel(
-            "Volume, variable cost, fixed cost, and marketing assumptions remain "
-            "constant across the price range."
-        )
-        note.setObjectName("chartNote")
-        note.setWordWrap(True)
+        self.note = QLabel()
+        self.note.setObjectName("chartNote")
+        self.note.setWordWrap(True)
         layout.addWidget(self.chart_view)
-        layout.addWidget(note)
-
-    def update_chart(self, baseline: FinancialInputs, changes: ScenarioChanges) -> None:
-        helper = FinancialChartPanel(self._theme)
-        helper.chart_view = self.chart_view
-        helper.update_sensitivity(baseline, changes)
-        helper.deleteLater()
+        layout.addWidget(self.note)
 
     def set_theme(self, theme: str) -> None:
         self._theme = theme
+
+    def update_chart(self, baseline: FinancialInputs, changes: ScenarioChanges) -> None:
+        colors = CHART_THEMES[self._theme]
+        chart = _base_chart("Profit Sensitivity to Price", self._theme)
+        points = price_sensitivity(
+            baseline, changes, low=SENSITIVITY_RANGE[0], high=SENSITIVITY_RANGE[1]
+        )
+        best = best_price_change(points)
+        selected_profit = calculate_financials(
+            apply_changes(baseline, changes)
+        ).operating_profit
+        scale = currency_scale(
+            [point.operating_profit for point in points] + [selected_profit]
+        )
+
+        line = QLineSeries()
+        line.setName("Projected profit")
+        line.setPen(QPen(QColor(colors.line), 2.5))
+        for point in points:
+            line.append(point.price_change, point.operating_profit / scale.divisor)
+        chart.addSeries(line)
+        added: list[QLineSeries | QScatterSeries] = [line]
+
+        demand_responds = changes.price_elasticity != 0
+        if demand_responds:
+            optimum = QScatterSeries()
+            optimum.setName(f"Best in range ({best.price_change:+.1f}%)")
+            optimum.setMarkerShape(QScatterSeries.MarkerShape.MarkerShapeRectangle)
+            optimum.setColor(QColor(colors.background))
+            optimum.setBorderColor(QColor(colors.line))
+            optimum.setPen(QPen(QColor(colors.line), 2.5))
+            optimum.setMarkerSize(12)
+            optimum.append(QPointF(best.price_change, best.operating_profit / scale.divisor))
+            chart.addSeries(optimum)
+            added.append(optimum)
+
+        selected = QScatterSeries()
+        selected.setName(f"Selected ({changes.price:+.1f}%)")
+        selected.setColor(QColor(colors.marker))
+        selected.setBorderColor(QColor(colors.marker_border))
+        selected.setMarkerSize(13)
+        selected.append(QPointF(changes.price, selected_profit / scale.divisor))
+        chart.addSeries(selected)
+        added.append(selected)
+
+        profits = [point.operating_profit / scale.divisor for point in points]
+        low = min(*profits, selected_profit / scale.divisor)
+        high = max(*profits, selected_profit / scale.divisor)
+        padding = max((high - low) * 0.12, abs(high) * 0.05, 1e-9)
+        y_axis = _money_axis(low - padding, high + padding, scale)
+        if y_axis.min() < 0 < y_axis.max():
+            zero = QLineSeries()
+            zero.setName("Break-even")
+            zero.setPen(QPen(QColor(colors.zero), 1.2, Qt.PenStyle.DashLine))
+            zero.append(SENSITIVITY_RANGE[0], 0.0)
+            zero.append(SENSITIVITY_RANGE[1], 0.0)
+            chart.addSeries(zero)
+            added.append(zero)
+
+        x_axis = QValueAxis()
+        x_axis.setRange(*SENSITIVITY_RANGE)
+        x_axis.setTickCount(5)
+        x_axis.setLabelFormat("%+.0f%%")
+        x_axis.setTitleText("Price change")
+        _style_axis(x_axis, self._theme)
+        _style_axis(y_axis, self._theme)
+        chart.addAxis(x_axis, Qt.AlignmentFlag.AlignBottom)
+        chart.addAxis(y_axis, Qt.AlignmentFlag.AlignLeft)
+        for series in added:
+            series.attachAxis(x_axis)
+            series.attachAxis(y_axis)
+        _show_legend(chart, self._theme)
+        self.chart_view.setChart(chart)
+        self.note.setText(sensitivity_note(changes, best.price_change, best.operating_profit))
+
+
+def sensitivity_note(
+    changes: ScenarioChanges, best_change: float, best_profit: float
+) -> str:
+    """Explain what the sensitivity curve holds constant and what it implies."""
+
+    if changes.price_elasticity == 0:
+        return (
+            "Price elasticity is off, so volume ignores price and profit rises in a "
+            "straight line. Set an elasticity to model customers' response."
+        )
+    return (
+        f"Volume responds to price (elasticity {changes.price_elasticity:.1f}). "
+        f"Most profitable price change in range: {best_change:+.1f}%, "
+        f"{format_currency(best_profit)} operating profit."
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class CurrencyScale:
+    """Divisor and labels for showing money in thousands, millions or billions."""
+
+    divisor: float
+    suffix: str
+    unit_name: str
+
+    def label(self, scaled_value: float, decimals: int) -> str:
+        if abs(scaled_value) < 10 ** -(decimals + 1):
+            scaled_value = 0.0
+        sign = "-" if scaled_value < 0 else ""
+        return f"{sign}${abs(scaled_value):,.{decimals}f}{self.suffix}"
+
+
+def currency_scale(values: list[float]) -> CurrencyScale:
+    maximum = max((abs(value) for value in values), default=0.0)
+    if maximum >= 1_000_000_000:
+        return CurrencyScale(1_000_000_000.0, "B", "billions")
+    if maximum >= 1_000_000:
+        return CurrencyScale(1_000_000.0, "M", "millions")
+    if maximum >= 1_000:
+        return CurrencyScale(1_000.0, "k", "thousands")
+    return CurrencyScale(1.0, "", "dollars")
+
+
+def nice_ticks(low: float, high: float, target: int = 5) -> tuple[float, float, float]:
+    """Round an axis range out to tick steps of 1, 2, 2.5 or 5 × 10ⁿ.
+
+    Returns ``(start, stop, step)`` covering ``low``..``high``.
+    """
+
+    if high < low:
+        low, high = high, low
+    if high - low < 1e-12:
+        high = low + 1.0
+    raw_step = (high - low) / max(target, 1)
+    magnitude = 10 ** floor(log10(raw_step))
+    step = next(
+        multiple * magnitude
+        for multiple in (1.0, 2.0, 2.5, 5.0, 10.0)
+        if multiple * magnitude >= raw_step
+    )
+    start = floor(low / step + 1e-9) * step
+    stop = ceil(high / step - 1e-9) * step
+    return start, stop, step
+
+
+def tick_decimals(step: float) -> int:
+    """Decimals needed to show every multiple of ``step`` exactly."""
+
+    for decimals in range(4):
+        if abs(step * 10**decimals - round(step * 10**decimals)) < 1e-9:
+            return decimals
+    return 4
+
+
+def _money_axis(low: float, high: float, scale: CurrencyScale) -> QCategoryAxis:
+    """A value axis with round ticks and correctly signed currency labels."""
+
+    start, stop, step = nice_ticks(low, high)
+    decimals = tick_decimals(step)
+    axis = QCategoryAxis()
+    axis.setLabelsPosition(QCategoryAxis.AxisLabelsPosition.AxisLabelsPositionOnValue)
+    axis.setStartValue(start)
+    count = round((stop - start) / step)
+    for index in range(count + 1):
+        value = start + index * step
+        axis.append(scale.label(value, decimals), value)
+    axis.setRange(start, stop)
+    axis.setTitleText(f"USD ({scale.unit_name})")
+    return axis
 
 
 def _base_chart(title: str, theme: str) -> QChart:
     colors = CHART_THEMES[theme]
     chart = QChart()
     chart.setTitle(title)
+    chart.setAnimationOptions(QChart.AnimationOption.NoAnimation)
     title_font = QFont(QApplication.font())
     title_font.setPointSize(12)
     title_font.setBold(True)
@@ -217,20 +315,15 @@ def _base_chart(title: str, theme: str) -> QChart:
     return chart
 
 
-def _style_axis(axis: QValueAxis | QBarCategoryAxis, theme: str) -> None:
+def _show_legend(chart: QChart, theme: str) -> None:
+    chart.legend().setVisible(True)
+    chart.legend().setAlignment(Qt.AlignmentFlag.AlignBottom)
+    chart.legend().setLabelColor(QColor(CHART_THEMES[theme].text))
+
+
+def _style_axis(axis: QValueAxis | QBarCategoryAxis | QCategoryAxis, theme: str) -> None:
     colors = CHART_THEMES[theme]
     axis.setLabelsColor(QColor(colors.secondary_text))
     axis.setTitleBrush(QColor(colors.text))
     axis.setGridLineColor(QColor(colors.grid))
     axis.setLinePenColor(QColor(colors.axis))
-
-
-def _currency_scale(values: list[float]) -> tuple[float, str, str, str]:
-    maximum = max((abs(value) for value in values), default=0.0)
-    if maximum >= 1_000_000_000:
-        return 1_000_000_000.0, "billions", "$%.1fB", "B"
-    if maximum >= 1_000_000:
-        return 1_000_000.0, "millions", "$%.1fM", "M"
-    if maximum >= 1_000:
-        return 1_000.0, "thousands", "$%.0fk", "k"
-    return 1.0, "dollars", "$%.0f", ""

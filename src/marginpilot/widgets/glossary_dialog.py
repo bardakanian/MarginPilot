@@ -8,13 +8,11 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
-    QFrame,
     QLabel,
     QScrollArea,
     QVBoxLayout,
     QWidget,
 )
-
 
 GlossaryEntry = tuple[str, str, str | None]
 
@@ -48,11 +46,14 @@ SECTIONS: Sequence[tuple[str, Sequence[GlossaryEntry]]] = (
             ("Current scenario", "The business’s original financial position before slider adjustments are applied.", None),
             ("Proposed scenario", "The estimated financial position after the selected changes are applied.", None),
             ("Selling-price change", "The percentage increase or decrease applied to the selling price per unit.", None),
-            ("Sales-volume change", "The percentage increase or decrease applied to expected unit sales.", None),
+            ("Sales-volume change", "The percentage increase or decrease applied to expected unit sales, independent of any price change.", None),
+            ("Price elasticity of demand", "How strongly customers react to a price change. At -1.5, a 1% price rise loses about 1.5% of volume. At 0 (off), volume ignores price.", "Proposed units = units × (1 + volume change) × (1 + price change) ^ elasticity"),
+            ("Most profitable price change", "With elasticity set, the price change between -20% and +20% that gives the highest operating profit, holding every other assumption.", None),
             ("Unit-cost change", "The percentage increase or decrease applied to variable cost per unit.", None),
             ("Fixed-cost change", "The percentage increase or decrease applied to fixed operating costs.", None),
             ("Marketing-spend change", "The percentage increase or decrease applied to the marketing budget.", None),
             ("Assumption", "A value selected by the user for scenario analysis. It is not a guaranteed forecast.", None),
+            ("Percentage points (pp)", "The difference between two percentages. A margin moving from 21.3% to 18.4% falls 2.9 pp, not 2.9%.", "Proposed margin − current margin"),
         ),
     ),
     (

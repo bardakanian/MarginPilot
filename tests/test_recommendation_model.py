@@ -10,7 +10,6 @@ from marginpilot.models.financial_model import (
 )
 from marginpilot.models.recommendation_model import generate_management_assessment
 
-
 DEMO_BASELINE = FinancialInputs(10_000, 50, 28, 120_000, 40_000)
 DEMO_CHANGES = ScenarioChanges(
     price=6, volume=-3, variable_cost=2, fixed_cost=0, marketing=25
@@ -98,3 +97,21 @@ def test_assessment_formats_currency_percentages_and_units_consistently() -> Non
     assert "9,700 units" in assessment.summary
     assert "$50,000" in assessment.summary
     assert "$53.00 per unit" in assessment.assumptions_note
+
+
+def test_assumptions_note_mentions_elasticity_only_when_used() -> None:
+    proposed = apply_changes(DEMO_BASELINE, DEMO_CHANGES)
+    current_results = calculate_financials(DEMO_BASELINE)
+    proposed_results = calculate_financials(proposed)
+    without = generate_management_assessment(
+        DEMO_BASELINE, proposed, current_results, proposed_results
+    )
+    with_elasticity = generate_management_assessment(
+        DEMO_BASELINE,
+        proposed,
+        current_results,
+        proposed_results,
+        price_elasticity=-1.25,
+    )
+    assert "elasticity" not in without.assumptions_note
+    assert "price elasticity -1.2" in with_elasticity.assumptions_note
